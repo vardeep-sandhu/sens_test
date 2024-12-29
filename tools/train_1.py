@@ -1,20 +1,10 @@
-from pathlib import Path
-
-import numpy as np
 import torch
-from torch import nn
-from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
-
-import torch.nn.functional as F
-import spconv.pytorch as spconv
+from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 import os
 from dataset import SemanticKITTIDataset
-from tools.crude_voxel_downsampling import OptimizedTrajectoryPredictor
 from lightning.pytorch.loggers import TensorBoardLogger
 from voxelnet_model import TrajectoryPredictorWithVoxelNet
-
 
 def custom_collate_fn(batch):
     """
@@ -31,39 +21,54 @@ def custom_collate_fn(batch):
         labels: Tensor of shape (B, *) ground truth labels.
     """
     # Separate point clouds and labels
-    point_clouds, labels = zip(*batch)
+    voxels = [torch.Tensor(i["voxels"]["voxels"]) for i in batch]
+    max_num_voxels = max(v.shape[0] for v in voxels)
+    num_points = [torch.Tensor(i["voxels"]["num_points"]) for i in batch]
+    voxel_coordinates = [torch.Tensor(i['voxels']['coordinates']) for i in batch]
+    grid_shape = torch.Tensor(batch[0]['voxels']['shape'])
+    targets = [i["target"] for i in batch]
+    voxel_shape = voxels[0].shape[1:]
+    padded_voxels = []
+    masks = []
+    padded_num_points = []
+    padded_voxel_coordinates = []
 
-    # Find max number of points in the batch
-    max_points = max(pc.shape[0] for pc in point_clouds)
+    for i in range(len(voxels)):
+        num_voxels = voxels[i].shape[0]
+        # Pad the voxel tensor
+        padded = torch.zeros((max_num_voxels, *voxel_shape), dtype=voxels[i].dtype)
+        p_num_points = torch.zeros((max_num_voxels))
+        p_voxel_coordinates = torch.zeros((max_num_voxels, 3))
+        p_voxel_coordinates[:num_voxels] = voxel_coordinates[i]
+        p_num_points[:num_voxels] = num_points[i]
+        padded[:num_voxels] = voxels[i]  # Copy valid voxels
+        padded_voxels.append(padded)
+        padded_num_points.append(p_num_points)
+        padded_voxel_coordinates.append(p_voxel_coordinates)
+        
+        mask = torch.zeros(max_num_voxels, dtype=torch.bool)
+        mask[:num_voxels] = True
+        masks.append(mask)
+    batch_voxels = torch.stack(padded_voxels)
+    batch_masks = torch.stack(masks)
+    batch_num_points = torch.stack(padded_num_points)  # Optional
+    batch_voxel_coordinates = torch.stack(padded_voxel_coordinates)
+    return {
+        'voxels': batch_voxels,
+        'mask': batch_masks,
+        'num_points': batch_num_points,
+        'grid_shape': grid_shape,
+        'voxel_coordinates' : batch_voxel_coordinates,
+        'target': torch.stack(targets)
+    }
 
-    # Pad point clouds to max_points
-    padded_point_clouds = torch.zeros((len(batch), max_points, 3), dtype=torch.float32)
-    masks = torch.zeros((len(batch), max_points), dtype=torch.bool)
-
-    for i, pc in enumerate(point_clouds):
-        n_points = pc.shape[0]
-        padded_point_clouds[i, :n_points] = pc
-        masks[i, :n_points] = True
-
-    # Convert labels to a tensor
-    labels = (
-        torch.stack(labels)
-        if isinstance(labels[0], torch.Tensor)
-        else torch.tensor(labels)
-    )
-
-    return padded_point_clouds, masks, labels
-
-
-# Additional Training Configuration
 def train_model():
     logger = TensorBoardLogger("tb_logs", name="first_model")
-    # Lightning Trainer with optimizations
     trainer = pl.Trainer(
-        accelerator="gpu",
+        accelerator="cpu",
         devices=1,  # Or multiple GPUs
         precision=16,  # 16-bit precision
-        max_epochs=100,
+        max_epochs=10,
         logger=logger,
         # gradient_clip_val=0.5,
         # accumulate_grad_batches=4,  # Simulate larger batch sizes
@@ -71,16 +76,14 @@ def train_model():
     )
 
     # Initialize model
-    model = TrajectoryPredictorWithVoxelNet(
-        voxel_size=0.2, grid_bounds=((-5, 5), (-5, 5), (-2, 2))
-    )
+    model = TrajectoryPredictorWithVoxelNet()
 
     # Create dataset and dataloader
     train_dataset = SemanticKITTIDataset(
-        "/home/sandhu/learning/sensmore_test/SemanticKITTI_00", train=True
+        "/home/sandhu/project/sens_test-main/SemanticKITTI_00", train=True
     )
     test_dataset = SemanticKITTIDataset(
-        "/home/sandhu/learning/sensmore_test/SemanticKITTI_00", train=False
+        "/home/sandhu/project/sens_test-main/SemanticKITTI_00", train=False
     )
 
     train_dataloader = DataLoader(
@@ -88,15 +91,17 @@ def train_model():
         batch_size=2,
         num_workers=os.cpu_count(),
         pin_memory=True,
+        shuffle=True,
         collate_fn=custom_collate_fn,
         persistent_workers=True,
     )
     test_dataloader = DataLoader(
         test_dataset,
-        batch_size=2,
+        batch_size=1,
         num_workers=os.cpu_count(),
         pin_memory=True,
-        collate_fn=custom_collate_fn,
+        shuffle=False,
+        # collate_fn=custom_collate_fn,
         persistent_workers=True,
     )
 

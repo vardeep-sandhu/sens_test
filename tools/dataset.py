@@ -2,24 +2,17 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch import nn
-from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
+from torch.utils.data import  Dataset
 
-import torch.nn.functional as F
-import spconv.pytorch as spconv
-import pytorch_lightning as pl
 import os
 from scipy.spatial.transform import Rotation as R
-
+from voxelization import Voxelization
 
 class SemanticKITTIDataset(Dataset):
     def __init__(self, data_path: str, lookahead: int = 30, train=True):
         self.data_path = Path(data_path)
         self.lookahead = lookahead
         self.train = train
-        # self.poses = self._load_poses()
-        # self.lidar_files = sorted((self.data_path / "velodyne").glob("*.bin"))
         self.train_poses = self._load_poses()[:4000]
         self.test_poses = self._load_poses()[4000:]
         self.train_lidar_files = sorted((self.data_path / "velodyne").glob("*.bin"))[
@@ -28,7 +21,13 @@ class SemanticKITTIDataset(Dataset):
         self.test_lidar_files = sorted((self.data_path / "velodyne").glob("*.bin"))[
             4000:
         ]
-
+        prange = np.array([-50, -50, -1, 50, 50, 3])
+        voxel_size= np.array([0.2, 0.2, 0.3])
+        max_points_in_voxel = 5
+        max_voxel_num = 150000
+        
+        self.voxel_generator = Voxelization(voxel_size, prange, max_points_in_voxel, max_voxel_num)
+    
     def _load_poses(self) -> np.ndarray:
         calib = self._parse_calibration(self.data_path / "calib.txt")
         return self._parse_poses(self.data_path / "poses.txt", calib)
@@ -72,8 +71,12 @@ class SemanticKITTIDataset(Dataset):
             return len(self.train_lidar_files) - (self.lookahead + 1)
         else:
             return len(self.test_lidar_files) - (self.lookahead + 1)
+    
+    def do_voxelization(self, data):
+        return self.voxel_generator.voxelize(data)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        data = {}
         if self.train:
             lidar_data = self._load_lidar(self.train_lidar_files[idx])
             current_pose = self.train_poses[idx]
@@ -106,6 +109,8 @@ class SemanticKITTIDataset(Dataset):
             relative_poses.append(pose_tensor)
 
         # Stack all relative poses into a single tensor
-        target = torch.stack(relative_poses)  # Shape: (lookahead, 12)
+        data["points"] = lidar_data
 
-        return lidar_tensor, target  # lidar_tensor: (C, H, W), target: (lookahead, 12)
+        data = self.do_voxelization(data)
+        data["target"] = torch.stack(relative_poses)
+        return data
