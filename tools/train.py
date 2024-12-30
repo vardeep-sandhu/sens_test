@@ -79,7 +79,7 @@ def train_model(dataset_path: str, do_test: bool):
 
     train_dataloader = DataLoader(
         train_dataset,
-        batch_size=2,
+        batch_size=1,
         num_workers=os.cpu_count(),
         pin_memory=True,
         shuffle=True,
@@ -88,7 +88,7 @@ def train_model(dataset_path: str, do_test: bool):
     )
     test_dataloader = DataLoader(
         test_dataset,
-        batch_size=2,
+        batch_size=1,
         num_workers=os.cpu_count(),
         pin_memory=True,
         shuffle=False,

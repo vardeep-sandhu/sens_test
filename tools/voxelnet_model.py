@@ -15,8 +15,8 @@ class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
         self.outdim = outdim
         self.reader = VoxelFeatureExtractor()
 
-        self.bev_converter = BEVConverter(3, "max")
-        self.trajectory_head = TrajectoryPredictionModel(3)
+        self.bev_converter = BEVConverter(64, "max")
+        self.trajectory_head = TrajectoryPredictionModel(64)
         self.criterion = trajectory_loss
         self.device_ = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -71,7 +71,7 @@ class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
     def forward(self, data):
         encoded_features = self.extract_feat(
             data
-        ) # B, N, 3
+        ) # B, N, 64
 
         grid = self.grid_action(data, encoded_features)
         grid = self.bev_converter(grid)

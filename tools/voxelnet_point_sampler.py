@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 class VoxelFeatureExtractor(nn.Module):
-    def __init__(self, input_dim=3, output_dim=3):
+    def __init__(self, input_dim=3, output_dim=64):
         """
         Args:
             input_dim (int): The dimensionality of the input features (x, y, z).
@@ -49,45 +49,6 @@ class VoxelFeatureExtractor(nn.Module):
         voxel_features = aggregated_features * voxel_mask.unsqueeze(-1)  # Shape (B, N, output_dim)
 
         return voxel_features
-
-class VoxelGridProcessor(nn.Module):
-    def __init__(self, input_channels, lookahead, out_dim=7):
-        super(VoxelGridProcessor, self).__init__()
-        
-        # 3D Convolutional Layers
-        self.conv3d = nn.Sequential(
-            nn.Conv3d(input_channels, 32, kernel_size=3, stride=(2, 2, 2), padding=1),  # Downsample all spatial dims
-            nn.ReLU(),
-            nn.Conv3d(32, 64, kernel_size=3, stride=(2, 2, 2), padding=1),              # Downsample further
-            nn.ReLU(),
-            nn.Conv3d(64, 128, kernel_size=3, stride=(2, 2, 2), padding=1),             # Extract deeper features
-            nn.ReLU(),
-        )
-        
-        # Compute flattened size dynamically
-        # Assuming input grid: [B, 3, 40, 1504, 1504]
-        self.flattened_size = self._calculate_flattened_size(input_channels, (40, 1504, 1504))
-        
-        # Fully Connected Layers
-        self.fc = nn.Sequential(
-            nn.Linear(self.flattened_size, 512),   # Adjust flattened size dynamically
-            nn.ReLU(),
-            nn.Linear(512, lookahead * out_dim),  # Final output shape: (B, lookahead * out_dim)
-        )
-    
-    def _calculate_flattened_size(self, input_channels, grid_size):
-        """Helper to calculate the flattened size after Conv3D."""
-        with torch.no_grad():
-            dummy_input = torch.zeros(1, input_channels, *grid_size)  # Create a dummy tensor
-            output = self.conv3d(dummy_input)  # Forward pass through Conv3D
-            return output.numel()  # Flattened size of output tensor
-    
-    def forward(self, x):
-        # Input: x of shape (B, F, 40, 1504, 1504)
-        x = self.conv3d(x)  # Apply 3D convolutions
-        x = x.view(x.size(0), -1)  # Flatten spatial dimensions: (B, -1)
-        x = self.fc(x)  # Fully connected layers
-        return x
 
 class TrajectoryPredictionModel(nn.Module):
     def __init__(self, input_channels, num_classes=30 * 7):
@@ -180,72 +141,3 @@ class BEVConverter(nn.Module):
             raise ValueError(f"Unknown BEV method: {self.bev_method}")
         
         return bev
-
-
-class VoxelBackbone3D(nn.Module):
-    def __init__(self, input_dim=64, hidden_dims=[128, 256], output_dim=256):
-        """
-        Args:
-            input_dim (int): Input feature dimension for each voxel.
-            hidden_dims (list): List of hidden dimensions for 3D convolution layers.
-            output_dim (int): Final output dimension after processing.
-        """
-        super(VoxelBackbone3D, self).__init__()
-
-        self.conv_layers = nn.Sequential(
-            nn.Conv3d(1, hidden_dims[0], kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv3d(hidden_dims[0], hidden_dims[1], kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv3d(hidden_dims[1], hidden_dims[1], kernel_size=3, stride=2, padding=1),  # Downsample
-            nn.ReLU(),
-        )
-
-        # Final conv layer to reduce channels to `output_dim`
-        self.final_conv = nn.Conv3d(hidden_dims[-1], output_dim, kernel_size=1)
-
-    def forward(self, voxel_features):
-        """
-        Args:
-            voxel_features (torch.Tensor): Input voxel features of shape (B, N, C).
-
-        Returns:
-            torch.Tensor: Processed voxel features of shape (B, output_dim, D', H', W').
-        """
-        B, N, C = voxel_features.shape
-
-        # Reshape input to fit 3D Conv input (B, C_in=1, D=N, H=1, W=C)
-        voxel_grid = voxel_features.view(B, 1, N, 1, C)  # Shape: (B, 1, N, 1, C)
-
-        # Process through 3D conv layers
-        conv_out = self.conv_layers(voxel_grid)  # Shape: (B, hidden_dims[-1], D', H', W')
-
-        # Final channel reduction
-        output = self.final_conv(conv_out)  # Shape: (B, output_dim, D', H', W')
-        return output
-
-class TrajectoryHead3D(nn.Module):
-    def __init__(self, input_dim=256, lookahead=30, outdim=7):
-        """
-        Args:
-            input_dim (int): Input channel dimension from the backbone.
-            lookahead (int): Number of timesteps to predict.
-            outdim (int): Dimensionality of the trajectory output per timestep.
-        """
-        super(TrajectoryHead3D, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv3d(input_dim, input_dim, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv3d(input_dim, lookahead * outdim, kernel_size=1),
-        )
-
-    def forward(self, features):
-        """
-        Args:
-            features (torch.Tensor): Input features from the backbone, shape (B, input_dim, D', H', W').
-
-        Returns:
-            torch.Tensor: Predicted trajectory of shape (B, lookahead * outdim).
-        """
-        x = self.conv(features)  # Shape: (B, lookahead * outdim, D', H', W')
-        return x.mean(dim=[2, 3, 4])  # Global pooling to (B, lookahead * outdim)
