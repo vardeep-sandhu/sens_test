@@ -1,9 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-import torch
-import torch.nn as nn
 
 class VoxelFeatureExtractor(nn.Module):
     def __init__(self, input_dim=3, output_dim=3):
@@ -38,10 +34,10 @@ class VoxelFeatureExtractor(nn.Module):
         point_mask = torch.arange(P, device=num_voxels.device).expand(B, N, P) < num_voxels.unsqueeze(-1)
 
         # Apply the point mask to set invalid points to zero
-        valid_points = voxels * point_mask.unsqueeze(-1)  # Shape (B, N, P, F)
+        # valid_points = voxels * point_mask.unsqueeze(-1)  # Shape (B, N, P, F) 
 
         # Compute per-point features using the MLP
-        point_features = self.mlp(valid_points)  # Shape (B, N, P, output_dim)
+        point_features = self.mlp(voxels)  # Shape (B, N, P, output_dim)
 
         # Mask invalid points to exclude them from the aggregation
         point_features = point_features * point_mask.unsqueeze(-1)  # Shape (B, N, P, output_dim)
@@ -92,10 +88,6 @@ class VoxelGridProcessor(nn.Module):
         x = x.view(x.size(0), -1)  # Flatten spatial dimensions: (B, -1)
         x = self.fc(x)  # Fully connected layers
         return x
-
-
-import torch
-import torch.nn as nn
 
 class TrajectoryPredictionModel(nn.Module):
     def __init__(self, input_channels, num_classes=30 * 7):

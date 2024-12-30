@@ -1,9 +1,7 @@
 import torch
-import torch.nn as nn
 import pytorch_lightning as pl
-import torch.nn.functional as F
 from loss import *
-from voxelnet_point_sampler import VoxelFeatureExtractor,BEVConverter, TrajectoryPredictionModel, VoxelGridProcessor, VoxelBackbone3D, TrajectoryHead3D
+from voxelnet_point_sampler import VoxelFeatureExtractor,BEVConverter, TrajectoryPredictionModel
 
 class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
     def __init__(
@@ -24,26 +22,52 @@ class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
 
     def extract_feat(self, data):
         input_features = self.reader(data["voxels"], data['num_points'], data["mask"])
-        return input_features
+        return input_features #B, N, 3 (3 is the feature dim)
     
     def grid_action(self, data, voxel_features):
+        """
+        Efficiently scatter voxel features into a dense grid.
+        
+        Args:
+            data (dict): A dictionary containing:
+                - 'grid_shape': Tuple of (H, W, D) defining the grid dimensions.
+                - 'mask': Tensor of shape (B, N), indicating valid voxels.
+                - 'voxel_coordinates': Tensor of shape (B, N, 3), containing voxel indices (z, y, x).
+            voxel_features (torch.Tensor): Tensor of shape (B, N, output_dim), containing features for each voxel.
+
+        Returns:
+            torch.Tensor: Dense grid of shape (B, output_dim, D, W, H).
+        """
         B, N, output_dim = voxel_features.shape
         H, W, D = map(int, data['grid_shape'])
 
-        # Initialize a grid with zeros
+        # Flatten 3D voxel coordinates to a 1D grid index
+        voxel_coordinates = data['voxel_coordinates'].long()  # Shape: (B, N, 3)
+        mask = data['mask'].bool()  # Shape: (B, N)
+
+        # Compute flat indices for all valid voxels
+        flat_indices = (
+            voxel_coordinates[:, :, 0] * (W * H) +
+            voxel_coordinates[:, :, 1] * H +
+            voxel_coordinates[:, :, 2]
+        )  # Shape: (B, N)
+
+        # Apply mask to filter valid features and indices
+        flat_indices = flat_indices[mask]  # Shape: (num_valid_voxels,)
+        valid_features = voxel_features[mask]  # Shape: (num_valid_voxels, output_dim)
+
+        # Batch indices for scatter operation
+        batch_indices = torch.arange(B, device=voxel_features.device).repeat_interleave(mask.sum(dim=1))  # Shape: (num_valid_voxels,)
+
+        # Create a dense grid and scatter features
         grid = torch.zeros((B, output_dim, D, W, H), device=voxel_features.device)
+        grid_flat = grid.view(B, output_dim, -1)  # Shape: (B, output_dim, D * W * H)
 
-        for b in range(B):
-            # Select valid voxels for this batch sample
-            valid_mask = data["mask"][b]  # Shape: (N,)
-            valid_features = voxel_features[b][valid_mask]  # Shape: (num_valid_voxels, output_dim)
-            valid_coordinates = data['voxel_coordinates'][b][valid_mask].long()  # Shape: (num_valid_voxels, 3)
+        # Scatter valid features into the flattened grid
+        grid_flat[batch_indices, :, flat_indices] = valid_features
 
-            # Scatter valid features into the grid
-            for i in range(output_dim):
-                grid[b, i, valid_coordinates[:, 0], valid_coordinates[:, 1], valid_coordinates[:, 2]] = valid_features[:, i]
         return grid
-    
+
     def forward(self, data):
         encoded_features = self.extract_feat(
             data
@@ -62,6 +86,20 @@ class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
         loss = self.criterion(prediction, batch["target"])
 
         self.log("train_loss", loss, prog_bar=True)
+        return loss
+    def validation_step(self, batch):
+        batch = {key: value.to(self.device_) for key, value in batch.items()}
+
+        prediction = self(batch)
+        prediction = prediction.view(-1, self.lookahead, self.outdim)
+        ade, fde = compute_ade_fde(prediction, batch["target"])
+
+        loss = self.criterion(prediction, batch["target"])
+
+        self.log("val_loss", loss, on_epoch=True, on_step=False)
+        self.log("val_ade", ade.mean(), on_epoch=True, on_step=False)
+        self.log("val_fde", fde.mean(), on_epoch=True, on_step=False)
+
         return loss
 
     def test_step(self, batch, batch_idx):

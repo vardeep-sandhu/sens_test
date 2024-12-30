@@ -4,7 +4,6 @@ import numpy as np
 import torch
 from torch.utils.data import  Dataset
 
-import os
 from scipy.spatial.transform import Rotation as R
 from voxelization import Voxelization
 
@@ -85,9 +84,6 @@ class SemanticKITTIDataset(Dataset):
             lidar_data = self._load_lidar(self.test_lidar_files[idx])
             current_pose = self.test_poses[idx]
             target_poses = self.test_poses[idx + 1 : idx + 1 + self.lookahead]
-
-        # Convert lidar data to tensor
-        lidar_tensor = torch.from_numpy(lidar_data).float()
 
         # Compute relative poses for all lookahead steps
         relative_poses = []
