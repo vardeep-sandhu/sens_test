@@ -87,6 +87,7 @@ class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
 
         self.log("train_loss", loss, prog_bar=True)
         return loss
+    
     def validation_step(self, batch):
         batch = {key: value.to(self.device_) for key, value in batch.items()}
 
@@ -101,6 +102,7 @@ class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
         self.log("val_fde", fde.mean(), on_epoch=True, on_step=False)
 
         return loss
+
 
     def test_step(self, batch, batch_idx):
         batch = {key: value.to(self.device_) for key, value in batch.items()}

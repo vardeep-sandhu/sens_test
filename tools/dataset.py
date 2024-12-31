@@ -6,6 +6,7 @@ from torch.utils.data import  Dataset
 
 from scipy.spatial.transform import Rotation as R
 from voxelization import Voxelization
+from augmentations import *
 
 class SemanticKITTIDataset(Dataset):
     def __init__(self, data_path: str, lookahead: int = 30, train=True):
@@ -24,7 +25,6 @@ class SemanticKITTIDataset(Dataset):
         voxel_size= np.array([0.2, 0.2, 0.3])
         max_points_in_voxel = 5
         max_voxel_num = 150000
-        
         self.voxel_generator = Voxelization(voxel_size, prange, max_points_in_voxel, max_voxel_num)
     
     def _load_poses(self) -> np.ndarray:
@@ -74,6 +74,13 @@ class SemanticKITTIDataset(Dataset):
     def do_voxelization(self, data):
         return self.voxel_generator.voxelize(data)
 
+    def augment_point_cloud(self, point_cloud):
+        point_cloud = random_rotation(point_cloud)
+        point_cloud = random_scaling(point_cloud)
+        point_cloud = random_translation(point_cloud)
+        point_cloud = random_jittering(point_cloud)
+        return point_cloud
+
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         data = {}
         if self.train:
@@ -103,10 +110,12 @@ class SemanticKITTIDataset(Dataset):
                 ]
             )
             relative_poses.append(pose_tensor)
+        
+        if self.train:
+            lidar_data = self.augment_point_cloud(lidar_data)
 
-        # Stack all relative poses into a single tensor
         data["points"] = lidar_data
-
+        
         data = self.do_voxelization(data)
         data["target"] = torch.stack(relative_poses)
         return data
