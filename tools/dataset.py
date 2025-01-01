@@ -9,27 +9,26 @@ from voxelization import Voxelization
 from augmentations import *
 
 class SemanticKITTIDataset(Dataset):
-    def __init__(self, data_path: str, lookahead: int = 30, train=True):
-        self.data_path = Path(data_path)
-        self.lookahead = lookahead
+    def __init__(self, config: dict, train=True):
+        self.data_path = Path(config.dataset_path)
+        self.lookahead = config.lookahead
         self.train = train
-        self.train_poses = self._load_poses()[:4000]
-        self.test_poses = self._load_poses()[4000:]
-        self.train_lidar_files = sorted((self.data_path / "velodyne").glob("*.bin"))[
-            :4000
-        ]
-        self.test_lidar_files = sorted((self.data_path / "velodyne").glob("*.bin"))[
-            4000:
-        ]
-        prange = np.array([-50, -50, -1, 50, 50, 3])
-        voxel_size= np.array([0.2, 0.2, 0.3])
-        max_points_in_voxel = 5
-        max_voxel_num = 150000
-        self.voxel_generator = Voxelization(voxel_size, prange, max_points_in_voxel, max_voxel_num)
+
+        # Load poses and lidar files
+        self.train_poses, self.test_poses = self._split_data(self._load_poses())
+        self.train_lidar_files, self.test_lidar_files = self._split_data(
+            sorted((self.data_path / "velodyne").glob("*.bin"))
+        )
+
+        self.voxel_generator = Voxelization(config.voxelization)
     
     def _load_poses(self) -> np.ndarray:
         calib = self._parse_calibration(self.data_path / "calib.txt")
         return self._parse_poses(self.data_path / "poses.txt", calib)
+
+    def _split_data(self, data):
+        split_idx = 4000
+        return data[:split_idx], data[split_idx:]
 
     @staticmethod
     def _parse_calibration(filename: Path) -> dict[str, np.ndarray]:
@@ -70,39 +69,29 @@ class SemanticKITTIDataset(Dataset):
             return len(self.train_lidar_files) - (self.lookahead + 1)
         else:
             return len(self.test_lidar_files) - (self.lookahead + 1)
-    
-    def do_voxelization(self, data):
-        return self.voxel_generator.voxelize(data)
+        
 
-    def augment_point_cloud(self, point_cloud):
-        point_cloud = random_rotation(point_cloud)
-        point_cloud = random_scaling(point_cloud)
-        point_cloud = random_translation(point_cloud)
-        point_cloud = random_jittering(point_cloud)
-        return point_cloud
-
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        data = {}
+    def _get_data_split(self, idx: int):
+        """Gets the appropriate data split (train or test) based on the mode."""
         if self.train:
-            lidar_data = self._load_lidar(self.train_lidar_files[idx])
-            current_pose = self.train_poses[idx]
-            target_poses = self.train_poses[idx + 1 : idx + 1 + self.lookahead]
+            lidar_files, poses = self.train_lidar_files, self.train_poses
         else:
-            lidar_data = self._load_lidar(self.test_lidar_files[idx])
-            current_pose = self.test_poses[idx]
-            target_poses = self.test_poses[idx + 1 : idx + 1 + self.lookahead]
+            lidar_files, poses = self.test_lidar_files, self.test_poses
 
-        # Compute relative poses for all lookahead steps
+        lidar_data = self._load_lidar(lidar_files[idx])
+        current_pose = poses[idx]
+        target_poses = poses[idx + 1 : idx + 1 + self.lookahead]
+        return lidar_data, current_pose, target_poses
+
+    def _compute_relative_poses(self, current_pose, target_poses):
+        """Computes relative poses between current and target poses."""
         relative_poses = []
         for target_pose in target_poses:
             relative_pose = np.matmul(np.linalg.inv(current_pose), target_pose)
             translation = relative_pose[:3, 3]
             rotation = relative_pose[:3, :3]
+            quaternion = R.from_matrix(rotation).as_quat()  # Returns [q_x, q_y, q_z, q_w]
 
-            quaternion = R.from_matrix(
-                rotation
-            ).as_quat()  # Returns [q_x, q_y, q_z, q_w]
-            # Combine translation and rotation into a single tensor
             pose_tensor = torch.cat(
                 [
                     torch.from_numpy(translation).float(),
@@ -110,12 +99,31 @@ class SemanticKITTIDataset(Dataset):
                 ]
             )
             relative_poses.append(pose_tensor)
-        
+        return torch.stack(relative_poses)
+
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        data = {}
+        lidar_data, current_pose, target_poses = self._get_data_split(idx)
         if self.train:
             lidar_data = self.augment_point_cloud(lidar_data)
 
-        data["points"] = lidar_data
-        
-        data = self.do_voxelization(data)
-        data["target"] = torch.stack(relative_poses)
+        relative_poses = self._compute_relative_poses(current_pose, target_poses)        
+        voxels = self.do_voxelization(lidar_data)
+
+        data = {"points" : lidar_data, 
+                "voxels" : voxels,
+                "target" : relative_poses
+        }
         return data
+
+    def do_voxelization(self, data):
+        """Applies voxelization to the point cloud data."""
+        return self.voxel_generator.voxelize(data)
+
+    def augment_point_cloud(self, point_cloud):
+        """Applies augmentations to the point cloud."""
+        augmentations = [random_rotation, random_scaling, random_translation, random_jittering]
+        for aug in augmentations:
+            point_cloud = aug(point_cloud)
+        return point_cloud

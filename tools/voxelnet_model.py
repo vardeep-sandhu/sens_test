@@ -1,7 +1,8 @@
 import torch
 import pytorch_lightning as pl
 from loss import *
-from voxelnet_point_sampler import VoxelFeatureExtractor,BEVConverter, TrajectoryPredictionModel
+from voxelnet_point_sampler import VoxelFeatureExtractor, BEVConverter, TrajectoryPredictionModel
+from voxelnet_with_attention import VoxelFeatureExtractorAtt, BEVConverterAtt, TrajectoryPredictionModelAtt
 
 class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
     def __init__(
@@ -13,9 +14,9 @@ class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
         super().__init__()
         self.lookahead = lookahead
         self.outdim = outdim
-        self.reader = VoxelFeatureExtractor()
+        self.reader = VoxelFeatureExtractorAtt(input_dim=3, output_dim=64)
 
-        self.bev_converter = BEVConverter(64, "max")
+        self.bev_converter = BEVConverterAtt(64, "max")
         self.trajectory_head = TrajectoryPredictionModel(64)
         self.criterion = trajectory_loss
         self.device_ = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -41,29 +42,23 @@ class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
         B, N, output_dim = voxel_features.shape
         H, W, D = map(int, data['grid_shape'])
 
-        # Flatten 3D voxel coordinates to a 1D grid index
         voxel_coordinates = data['voxel_coordinates'].long()  # Shape: (B, N, 3)
         mask = data['mask'].bool()  # Shape: (B, N)
 
-        # Compute flat indices for all valid voxels
         flat_indices = (
             voxel_coordinates[:, :, 0] * (W * H) +
             voxel_coordinates[:, :, 1] * H +
             voxel_coordinates[:, :, 2]
         )  # Shape: (B, N)
 
-        # Apply mask to filter valid features and indices
         flat_indices = flat_indices[mask]  # Shape: (num_valid_voxels,)
         valid_features = voxel_features[mask]  # Shape: (num_valid_voxels, output_dim)
 
-        # Batch indices for scatter operation
         batch_indices = torch.arange(B, device=voxel_features.device).repeat_interleave(mask.sum(dim=1))  # Shape: (num_valid_voxels,)
 
-        # Create a dense grid and scatter features
         grid = torch.zeros((B, output_dim, D, W, H), device=voxel_features.device)
         grid_flat = grid.view(B, output_dim, -1)  # Shape: (B, output_dim, D * W * H)
 
-        # Scatter valid features into the flattened grid
         grid_flat[batch_indices, :, flat_indices] = valid_features
 
         return grid
@@ -78,7 +73,7 @@ class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
         out = self.trajectory_head(grid)
         return out
 
-    def training_step(self, batch, batch_idx):
+    def training_step(self, batch):
         batch = {key: value.to(self.device_) for key, value in batch.items()}
 
         prediction = self(batch)
@@ -100,11 +95,11 @@ class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
         self.log("val_loss", loss, on_epoch=True, on_step=False)
         self.log("val_ade", ade.mean(), on_epoch=True, on_step=False)
         self.log("val_fde", fde.mean(), on_epoch=True, on_step=False)
-
+        
         return loss
 
 
-    def test_step(self, batch, batch_idx):
+    def test_step(self, batch):
         batch = {key: value.to(self.device_) for key, value in batch.items()}
 
         prediction = self(batch)
@@ -116,7 +111,6 @@ class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
         self.log("val_loss", loss, on_epoch=True, on_step=False)
         self.log("val_ade", ade.mean(), on_epoch=True, on_step=False)
         self.log("val_fde", fde.mean(), on_epoch=True, on_step=False)
-
         return loss
 
     def configure_optimizers(self):
@@ -125,9 +119,8 @@ class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
             lr=5e-4,
             weight_decay=1e-5,
         )
-        # Warm-up + Cosine Annealing Scheduler
         scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer, 
-            lr_lambda=lambda epoch: min((epoch + 1) / 10, 1.0)  # Warm-up for 10 epochs
+            lr_lambda=lambda epoch: min((epoch + 1) / 10, 1.0)
         )
         return {"optimizer": optimizer, "lr_scheduler": scheduler}

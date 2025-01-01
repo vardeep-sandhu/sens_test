@@ -17,7 +17,9 @@ setup(
 	    "lightning",
         "scipy",  
         "matplotlib",
-        "numba"
+        "numba",
+        "python-box",
+        "pyyaml"
     ],
     python_requires=">=3.7",
 )
