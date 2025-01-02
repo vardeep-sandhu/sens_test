@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 
-class VoxelFeatureExtractorAtt(nn.Module):
+class VoxelFeatureExtractor(nn.Module):
     def __init__(self, input_dim=3, output_dim=64):
-        super(VoxelFeatureExtractorAtt, self).__init__()
+        super(VoxelFeatureExtractor, self).__init__()
         self.mlp = nn.Sequential(
             nn.Linear(input_dim, 32),
             nn.ReLU(),
@@ -32,9 +32,9 @@ class VoxelFeatureExtractorAtt(nn.Module):
 
         return voxel_features
 
-class TrajectoryPredictionModelAtt(nn.Module):
+class TrajectoryPredictionModel(nn.Module):
     def __init__(self, input_channels, num_classes=30 * 7):
-        super(TrajectoryPredictionModelAtt, self).__init__()
+        super(TrajectoryPredictionModel, self).__init__()
         self.backbone = nn.Sequential(
             nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
@@ -65,24 +65,9 @@ class TrajectoryPredictionModelAtt(nn.Module):
         x = self.trajectory_head(x)
         return x
 
-    
-    def forward(self, x):
-        """
-        Forward pass for trajectory prediction.
-        
-        Args:
-            x (torch.Tensor): Input tensor of shape (B, C, H, W).
-        
-        Returns:
-            torch.Tensor: Output tensor of shape (B, 30 * 7).
-        """
-        x = self.backbone(x)  # Pass through 2D ConvNet
-        x = self.trajectory_head(x)  # Flatten and predict trajectory
-        return x
-
-class BEVConverterAtt(nn.Module):
+class BEVConverter(nn.Module):
     def __init__(self, input_channels, bev_method="max"):
-        super(BEVConverterAtt, self).__init__()
+        super(BEVConverter, self).__init__()
         self.bev_method = bev_method
         if self.bev_method == "learned":
             self.depth_conv = nn.Conv3d(input_channels, input_channels, kernel_size=(40, 1, 1), stride=1, padding=0)

@@ -1,8 +1,8 @@
 import torch
 import pytorch_lightning as pl
 from loss import *
-from voxelnet_point_sampler import VoxelFeatureExtractor, BEVConverter, TrajectoryPredictionModel
-from voxelnet_with_attention import VoxelFeatureExtractorAtt, BEVConverterAtt, TrajectoryPredictionModelAtt
+#from voxelnet_point_sampler import VoxelFeatureExtractor, BEVConverter, TrajectoryPredictionModel
+from voxelnet_with_attention import VoxelFeatureExtractor, BEVConverter, TrajectoryPredictionModel
 
 class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
     def __init__(
@@ -14,9 +14,9 @@ class TrajectoryPredictorWithVoxelNet(pl.LightningModule):
         super().__init__()
         self.lookahead = lookahead
         self.outdim = outdim
-        self.reader = VoxelFeatureExtractorAtt(input_dim=3, output_dim=64)
+        self.reader = VoxelFeatureExtractor(input_dim=3, output_dim=64)
 
-        self.bev_converter = BEVConverterAtt(64, "max")
+        self.bev_converter = BEVConverter(64, "max")
         self.trajectory_head = TrajectoryPredictionModel(64)
         self.criterion = trajectory_loss
         self.device_ = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

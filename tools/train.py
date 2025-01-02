@@ -57,7 +57,7 @@ def custom_collate_fn(batch: list) -> dict:
 def train_model(config: Box):
     logger = TensorBoardLogger("tb_logs", name="first_model")
     trainer = pl.Trainer(
-        accelerator="cpu",
+        accelerator="gpu",
         devices=1,
         precision=16,
         max_epochs=config.epochs,
@@ -80,7 +80,7 @@ def train_model(config: Box):
     )
     test_dataloader = DataLoader(
         test_dataset,
-        batch_size=1,
+        batch_size=config.test_batch_size,
         num_workers=os.cpu_count(),
         pin_memory=True,
         shuffle=False,
@@ -95,8 +95,8 @@ def train_model(config: Box):
         ckpt_path="best",
     )
 
-if __name__ == "__main__":
-    config_path = "config/init_config.yaml"
-    config = load_cofig(config_path)
-    
-    train_model(config)
+# if __name__ == "__main__":
+config_path = "/content/drive/MyDrive/Learning/sens_test/config/init_config.yaml"
+config = load_cofig(config_path)
+
+train_model(config)
